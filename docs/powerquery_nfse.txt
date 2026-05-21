@@ -1,0 +1,127 @@
+let
+    // ══════════════════════════════════════════════════════════════
+    // NFS-e × SISAP — slim para reconciliação
+    // Apenas notas onde a empresa é Tomadora ou Intermediária
+    // Locale en-US nas colunas numéricas (CSV usa ponto como decimal)
+    // ══════════════════════════════════════════════════════════════
+
+    CaminhoNFSe = "C:\Users\caio.nascimento\Desktop\nfse_edb\dados\nfse_consolidado.csv",
+
+    // ── 1. Leitura ────────────────────────────────────────────────
+    Fonte      = Csv.Document(File.Contents(CaminhoNFSe),
+                     [Delimiter = ",", Encoding = 65001, QuoteStyle = QuoteStyle.Csv]),
+    Cabecalhos = Table.PromoteHeaders(Fonte, [PromoteAllScalars = true]),
+
+    // ── 2. Seleciona colunas necessárias ─────────────────────────
+    ColunasNecessarias = Table.SelectColumns(Cabecalhos, {
+        "Chave NFS-e",
+        "Número NFS-e",
+        "Data Emissão",
+        "Competência",
+        "Situação",
+        "Unidade Elecnor",
+        "Papel Elecnor",
+        "CNPJ Prestador",
+        "Nome Prestador",
+        "Valor Serviço",
+        "Valor Líquido",
+        "Tem Evento",
+        "Tipo Evento",
+        "Data Evento"
+    }),
+
+    // ── 3. Tipagem — texto e datas ────────────────────────────────
+    TipadoTexto = Table.TransformColumnTypes(ColunasNecessarias, {
+        {"Chave NFS-e",     type text},
+        {"Número NFS-e",    type text},
+        {"Data Emissão",    type date},
+        {"Competência",     type date},
+        {"Situação",        type text},
+        {"Unidade Elecnor", type text},
+        {"Papel Elecnor",   type text},
+        {"CNPJ Prestador",  type text},
+        {"Nome Prestador",  type text},
+        {"Tem Evento",      type text},
+        {"Tipo Evento",     type text},
+        {"Data Evento",     type text}
+    }),
+
+    // ── 4. Tipagem — numérico com locale en-US ────────────────────
+    // CSV usa ponto como decimal (614.49). Em pt-BR o PBI leria como 61449.
+    // Forçar en-US garante leitura correta independente da configuração regional.
+    Tipado = Table.TransformColumnTypes(TipadoTexto, {
+        {"Valor Serviço",  Currency.Type},
+        {"Valor Líquido",  Currency.Type}
+    }, "en-US"),
+
+    // ── 5. Filtro de papel ────────────────────────────────────────
+    // Mantém apenas notas onde a Elecnor é contratante (tomadora ou intermediária)
+    // Notas onde a Elecnor é prestadora não entram no cruzamento com SISAP
+    FiltradoPapel = Table.SelectRows(
+        Tipado,
+        each [Papel Elecnor] = "Tomadora" or [Papel Elecnor] = "Intermediária"
+    ),
+
+    // ── 6. Colunas calculadas — período ──────────────────────────
+    ComAno    = Table.AddColumn(FiltradoPapel, "Ano",
+                    each if [Competência] = null then null
+                         else Date.Year([Competência]), Int64.Type),
+    ComMesNum = Table.AddColumn(ComAno, "Mês Número",
+                    each if [Competência] = null then null
+                         else Date.Month([Competência]), Int64.Type),
+    ComAnoMes = Table.AddColumn(ComMesNum, "Ano-Mês",
+                    each if [Ano] = null then null
+                         else Text.From([Ano]) & "-" &
+                              Text.PadStart(Text.From([#"Mês Número"]), 2, "0"),
+                    type text),
+
+    // ── 7. Cancelada ──────────────────────────────────────────────
+    ComCancelada = Table.AddColumn(ComAnoMes, "Cancelada",
+                       each if [Situação] = "Cancelada" then "Sim" else "Não",
+                       type text),
+
+    // ── 8. Substituta ─────────────────────────────────────────────
+    ComSubstituta = Table.AddColumn(ComCancelada, "Substituta",
+                        each if [Situação] = "Gerada em Substituição" then "Sim" else "Não",
+                        type text),
+
+    // ── 9. Chave composta para cruzamento com SISAP ───────────────
+    // Chave = CNPJ (14) + Número NFS-e + Data Emissão (YYYY-MM-DD)
+    // Mais robusta que só CNPJ+Número — evita colisão com NF modelo 55
+    ComChave = Table.AddColumn(
+        ComSubstituta, "Chave_SISAP",
+        each
+            let
+                cnpj = Text.PadStart(
+                           Text.Select(Text.From([CNPJ Prestador] ?? ""), {"0".."9"}),
+                           14, "0"),
+                num  = Text.Trim(Text.From([#"Número NFS-e"] ?? "")),
+                dt   = if [Data Emissão] = null then ""
+                       else Date.ToText([Data Emissão], "yyyy-MM-dd")
+            in cnpj & "|" & num & "|" & dt,
+        type text
+    ),
+
+    // ── 10. Chave de reconciliação com ERP ───────────────────────
+    // A Chave_SISAP está pronta para merge com qualquer sistema de gestão.
+    // Padrão: CNPJ (14 dígitos) + "|" + Número da nota + "|" + Data de emissão
+    // Exemplo de merge com tabela ERP:
+    //
+    //   ErpBuffer = Table.Buffer(MinhaConsultaERP),
+    //   Merged    = Table.NestedJoin(ComChave, {"Chave_SISAP"},
+    //                   ErpBuffer, {"Chave_ERP"}, "Info_ERP", JoinKind.LeftOuter),
+    //   Expandido = Table.ExpandTableColumn(Merged, "Info_ERP",
+    //                   {"CodFornecedor", "StatusPagamento"},
+    //                   {"Cód. Fornecedor ERP", "Status Pagamento"}),
+
+    // ── 11. Limpeza final ─────────────────────────────────────────
+    SemChave = Table.RemoveColumns(ComSubstituta,
+                   if Table.HasColumns(ComSubstituta, "Chave_SISAP")
+                   then {"Chave_SISAP"} else {}),
+    Limpo    = Table.SelectRows(ComChave,
+                   each [#"Chave NFS-e"] <> null and [#"Chave NFS-e"] <> ""),
+    Ordenado = Table.Sort(Limpo,
+                   {{"Competência", Order.Descending}, {"Unidade Elecnor", Order.Ascending}})
+
+in
+    Ordenado

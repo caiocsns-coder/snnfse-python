@@ -1,0 +1,335 @@
+// ══════════════════════════════════════════════════════════════════
+// Medidas DAX — Reconciliação NFS-e × SISAP
+// Tabela principal: 'NFS-e' (consulta slim)
+// Tabela auxiliar : 'alertas' (alertas_retroativos.csv)
+//
+// Padrão:
+// - Medidas numéricas → usadas em cálculos, filtros e outros visuais
+// - Medidas Card      → usadas SOMENTE no cartão novo (retornam texto)
+// ══════════════════════════════════════════════════════════════════
+
+
+// ── CONTAGEM GERAL ────────────────────────────────────────────────
+
+Total Notas =
+    DISTINCTCOUNT('NFS-e'[Chave NFS-e])
+
+Total Notas Card =
+    VAR n = [Total Notas]
+    RETURN FORMAT(n, "########0")
+
+Notas no SISAP =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Existe no SISAP] = "Sim"
+    )
+
+Notas no SISAP Card =
+    VAR n = [Notas no SISAP]
+    RETURN FORMAT(n, "########0")
+
+Notas Fora do SISAP =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Existe no SISAP] = "Não"
+    )
+
+Notas Fora do SISAP Card =
+    VAR n = [Notas Fora do SISAP]
+    RETURN FORMAT(n, "########0")
+
+% Fora do SISAP =
+    DIVIDE([Notas Fora do SISAP], [Total Notas], 0)
+
+% Fora do SISAP Card =
+    VAR n = [% Fora do SISAP]
+    RETURN FORMAT(n, "0,00%")
+
+% No SISAP =
+    DIVIDE([Notas no SISAP], [Total Notas], 0)
+
+% No SISAP Card =
+    VAR n = [% No SISAP]
+    RETURN FORMAT(n, "0,00%")
+
+// Cobertura SISAP por competência — use com dCalendario[Ano-Mês] nas linhas
+// Mostra o percentual de notas de cada competência que já estão no SISAP
+Cobertura SISAP por Competência =
+    DIVIDE(
+        CALCULATE(
+            DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+            'NFS-e'[Existe no SISAP] = "Sim"
+        ),
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        0
+    )
+
+Cobertura SISAP por Competência Card =
+    VAR n = [Cobertura SISAP por Competência]
+    RETURN FORMAT(n, "0,00%")
+
+// Notas fora do SISAP por competência — contagem absoluta
+// Use com dCalendario[Ano-Mês] nas linhas para ver quais meses têm mais pendências
+Fora do SISAP por Competência =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Existe no SISAP] = "Não"
+    )
+
+Fora do SISAP por Competência Card =
+    VAR n = [Fora do SISAP por Competência]
+    RETURN FORMAT(n, "########0")
+
+
+// ── SITUAÇÃO ──────────────────────────────────────────────────────
+
+Notas Canceladas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Cancelada] = "Sim"
+    )
+
+Notas Canceladas Card =
+    VAR n = [Notas Canceladas]
+    RETURN FORMAT(n, "########0")
+
+Notas Geradas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Situação] = "Gerada"
+    )
+
+Notas Geradas Card =
+    VAR n = [Notas Geradas]
+    RETURN FORMAT(n, "########0")
+
+Notas Substitutas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Situação] = "Gerada em Substituição"
+    )
+
+Notas Substitutas Card =
+    VAR n = [Notas Substitutas]
+    RETURN FORMAT(n, "########0")
+
+
+// ── CONTABILIZAÇÃO ────────────────────────────────────────────────
+
+Notas Contabilizadas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Contabilizado] = "Sim"
+    )
+
+Notas Contabilizadas Card =
+    VAR n = [Notas Contabilizadas]
+    RETURN FORMAT(n, "########0")
+
+Notas Não Contabilizadas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Existe no SISAP] = "Sim",
+        'NFS-e'[Contabilizado] = "Não"
+    )
+
+Notas Não Contabilizadas Card =
+    VAR n = [Notas Não Contabilizadas]
+    RETURN FORMAT(n, "########0")
+
+% Contabilizadas =
+    DIVIDE([Notas Contabilizadas], [Notas no SISAP], 0)
+
+% Contabilizadas Card =
+    VAR n = [% Contabilizadas]
+    RETURN FORMAT(n, "0,00%")
+
+
+// ── PAGAMENTO ─────────────────────────────────────────────────────
+
+Notas Pagas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Pago] = "Sim"
+    )
+
+Notas Pagas Card =
+    VAR n = [Notas Pagas]
+    RETURN FORMAT(n, "########0")
+
+Notas Pendentes de Pagamento =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Existe no SISAP] = "Sim",
+        'NFS-e'[Cancelada] = "Não",
+        'NFS-e'[Pago] = "Não"
+    )
+
+Notas Pendentes de Pagamento Card =
+    VAR n = [Notas Pendentes de Pagamento]
+    RETURN FORMAT(n, "########0")
+
+Valor Pendente de Pagamento =
+    CALCULATE(
+        SUM('NFS-e'[Saldo SISAP]),
+        'NFS-e'[Existe no SISAP] = "Sim",
+        'NFS-e'[Cancelada] = "Não",
+        'NFS-e'[Pago] = "Não"
+    )
+
+Valor Pendente de Pagamento Card =
+    VAR n = [Valor Pendente de Pagamento]
+    RETURN FORMAT(n, "R$ #.##0,00")
+
+
+// ── ALERTAS ───────────────────────────────────────────────────────
+
+Canceladas e Pagas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Alerta] = "Cancelada e paga — verificar"
+    )
+
+Canceladas e Pagas Card =
+    VAR n = [Canceladas e Pagas]
+    RETURN FORMAT(n, "########0")
+
+Valor Canceladas e Pagas =
+    CALCULATE(
+        SUM('NFS-e'[Valor SISAP]),
+        'NFS-e'[Alerta] = "Cancelada e paga — verificar"
+    )
+
+Valor Canceladas e Pagas Card =
+    VAR n = [Valor Canceladas e Pagas]
+    RETURN FORMAT(n, "R$ #.##0,00")
+
+Canceladas Contabilizadas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Alerta] = "Cancelada e contabilizada — estornar"
+    )
+
+Canceladas Contabilizadas Card =
+    VAR n = [Canceladas Contabilizadas]
+    RETURN FORMAT(n, "########0")
+
+Valor Canceladas Contabilizadas =
+    CALCULATE(
+        SUM('NFS-e'[Saldo SISAP]),
+        'NFS-e'[Alerta] = "Cancelada e contabilizada — estornar"
+    )
+
+Valor Canceladas Contabilizadas Card =
+    VAR n = [Valor Canceladas Contabilizadas]
+    RETURN FORMAT(n, "R$ #.##0,00")
+
+Canceladas no SISAP sem Baixa =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Alerta] = "Cancelada no SISAP — baixar"
+    )
+
+Canceladas no SISAP sem Baixa Card =
+    VAR n = [Canceladas no SISAP sem Baixa]
+    RETURN FORMAT(n, "########0")
+
+Geradas sem Lançamento =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Alerta] = "Gerada — lançar no SISAP"
+    )
+
+Geradas sem Lançamento Card =
+    VAR n = [Geradas sem Lançamento]
+    RETURN FORMAT(n, "########0")
+
+Valor Geradas sem Lançamento =
+    CALCULATE(
+        SUM('NFS-e'[Valor Serviço]),
+        'NFS-e'[Alerta] = "Gerada — lançar no SISAP"
+    )
+
+Valor Geradas sem Lançamento Card =
+    VAR n = [Valor Geradas sem Lançamento]
+    RETURN FORMAT(n, "R$ #.##0,00")
+
+Canceladas OK =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Cancelada] = "Sim",
+        'NFS-e'[Alerta] = "OK"
+    )
+
+Canceladas OK Card =
+    VAR n = [Canceladas OK]
+    RETURN FORMAT(n, "########0")
+
+// Score de risco — apenas numérico, não faz sentido como card isolado
+Score de Risco =
+    [Canceladas e Pagas] * 4
+    + [Canceladas Contabilizadas] * 3
+    + [Canceladas no SISAP sem Baixa] * 2
+    + [Geradas sem Lançamento] * 1
+
+Score de Risco Card =
+    VAR n = [Score de Risco]
+    RETURN FORMAT(n, "########0")
+
+
+// ── CENTRO DE CUSTO / OBRA ────────────────────────────────────────
+
+Valor Pendente por Centro =
+    CALCULATE(
+        SUM('NFS-e'[Saldo SISAP]),
+        'NFS-e'[Cancelada] = "Não",
+        'NFS-e'[Pago] = "Não"
+    )
+
+Alertas por Centro =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Alerta] <> "OK"
+    )
+
+Valor em Risco por Centro =
+    CALCULATE(
+        SUM('NFS-e'[Saldo SISAP]),
+        'NFS-e'[Cancelada] = "Sim",
+        'NFS-e'[Alerta] <> "OK"
+    )
+
+
+// ── RETROATIVOS ───────────────────────────────────────────────────
+
+Total Retroativos =
+    COUNTROWS('alertas')
+
+Total Retroativos Card =
+    VAR n = [Total Retroativos]
+    RETURN FORMAT(n, "########0")
+
+Retroativos Críticos =
+    CALCULATE(
+        COUNTROWS('alertas'),
+        'alertas'[Urgência] = "Crítica"
+    )
+
+Retroativos Críticos Card =
+    VAR n = [Retroativos Críticos]
+    RETURN FORMAT(n, "########0")
+
+Retroativos Alta Prioridade =
+    CALCULATE(
+        COUNTROWS('alertas'),
+        'alertas'[Urgência] = "Alta"
+    )
+
+Retroativos Alta Prioridade Card =
+    VAR n = [Retroativos Alta Prioridade]
+    RETURN FORMAT(n, "########0")
+
+Retroativos por Filial =
+    CALCULATE(
+        COUNTROWS('alertas')
+    )

@@ -1,0 +1,73 @@
+// ============================================================
+// Power Query M — Alertas de Cancelamentos Retroativos
+// Fonte: dados/alertas_retroativos.csv
+//
+// Como usar:
+// 1. Power BI Desktop → Transformar dados → Nova Fonte → Consulta em Branco
+// 2. Editor Avançado → cole este código
+// 3. Ajuste o CaminhoCSV
+//
+// Relacionamento sugerido:
+//   Alertas[Chave NFS-e] → NFS-e[Chave NFS-e]
+//   Cardinalidade: Muitos para Um
+// ============================================================
+
+let
+    CaminhoCSV = "C:\Users\caio.nascimento\Desktop\teste_nfse\dados\alertas_retroativos.csv",
+
+    Fonte = Csv.Document(
+        File.Contents(CaminhoCSV),
+        [Delimiter = ",", Encoding = 65001, QuoteStyle = QuoteStyle.Csv]
+    ),
+
+    Cabecalhos = Table.PromoteHeaders(Fonte, [PromoteAllScalars = true]),
+
+    Tipado = Table.TransformColumnTypes(Cabecalhos, {
+        {"Empresa",               type text},
+        {"Chave NFS-e",           type text},
+        {"Competência Nota",      type text},
+        {"Competência Evento",    type text},
+        {"Data Evento",           type datetime},
+        {"Data Processamento",    type datetime},
+        {"Tipo Evento",           type text},
+        {"Situação",              type text},
+        {"Arquivo NFS-e",         type text},
+        {"Arquivo Evento",        type text},
+        {"Gerado em",             type datetime}
+    }),
+
+    // Quantos meses de diferença entre competência da nota e do evento
+    ComDefasagem = Table.AddColumn(
+        Tipado, "Defasagem (meses)",
+        each
+            let
+                comp_nota = [#"Competência Nota"],
+                comp_evt  = [#"Competência Evento"],
+                ano_n  = Number.From(Text.Start(comp_nota, 4)),
+                mes_n  = Number.From(Text.End(comp_nota, 2)),
+                ano_e  = Number.From(Text.Start(comp_evt, 4)),
+                mes_e  = Number.From(Text.End(comp_evt, 2)),
+                diff   = (ano_e - ano_n) * 12 + (mes_e - mes_n)
+            in
+                if comp_nota = null or comp_evt = null then null else diff,
+        Int64.Type
+    ),
+
+    // Nível de urgência baseado na defasagem
+    ComUrgencia = Table.AddColumn(
+        ComDefasagem, "Urgência",
+        each
+            if [#"Defasagem (meses)"] = null then "Indefinida"
+            else if [#"Defasagem (meses)"] >= 60 then "Crítica"    // > 60 dias
+            else if [#"Defasagem (meses)"] >= 30 then "Alta"       // 30-60 dias
+            else "Normal",                                          // < 30 dias
+        type text
+    ),
+
+    Ordenado = Table.Sort(
+        ComUrgencia,
+        {{"Data Evento", Order.Descending}}
+    )
+
+in
+    Ordenado

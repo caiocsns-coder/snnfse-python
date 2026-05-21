@@ -1,0 +1,92 @@
+let
+    // ══════════════════════════════════════════════════════════════
+    // Histórico SISAP — slim para reconciliação com NFS-e
+    // Colunas selecionadas: identificação, centro de custo,
+    // status de contabilização e pagamento
+    // ══════════════════════════════════════════════════════════════
+    Fonte             = Folder.Files("C:\Users\caio.nascimento\Desktop\Base BI\Historico_Sisap_EDB"),
+    ArquivosVisiveis  = Table.SelectRows(Fonte, each [Attributes]?[Hidden]? <> true),
+    InvocarFuncao     = Table.AddColumn(ArquivosVisiveis, "Transformar Arquivo",
+                            each #"Transformar Arquivo"([Content])),
+    ColunasExpandidas = Table.ExpandTableColumn(InvocarFuncao, "Transformar Arquivo",
+                            Table.ColumnNames(#"Transformar Arquivo"(#"Arquivo de Amostra"))),
+    NomesLimpos       = Table.TransformColumnNames(ColunasExpandidas, Text.Trim),
+
+    // ── Seleciona apenas as colunas necessárias ───────────────────
+    // Usa Table.SelectColumns com MissingField.UseNull para tolerar
+    // arquivos que não tenham todas as colunas (ex: layouts diferentes por período)
+    ColunasNecessarias = Table.SelectColumns(NomesLimpos, {
+        "Registro Tributário",
+        "Número da prova",
+        "Fornecedor",
+        "Nome do provedor",
+        "Destino",
+        "Nome do destino",
+        "Num. transação",
+        "Prova Total ML",
+        "Saldo ML",
+        "Data de emissão da prova"   // pode estar ausente em alguns arquivos
+    }, MissingField.UseNull),
+
+    // ── Tipagem ───────────────────────────────────────────────────
+    Tipado = Table.TransformColumnTypes(ColunasNecessarias, {
+        {"Registro Tributário",       type text},
+        {"Número da prova",           type text},
+        {"Fornecedor",                type text},
+        {"Nome do provedor",          type text},
+        {"Destino",                   type text},
+        {"Nome do destino",           type text},
+        {"Num. transação",            type text},
+        {"Data de emissão da prova",  type date}
+    }),
+
+    // Valores numéricos com locale explícito para evitar erro de separador decimal
+    TipadoNum = Table.TransformColumnTypes(Tipado, {
+        {"Prova Total ML", Currency.Type},
+        {"Saldo ML",       Currency.Type}
+    }, "en-US"),
+
+    // ── Flags derivadas ───────────────────────────────────────────
+
+    // Contabilizado: Num. transação diferente de "000000" e não vazio
+    ComContabilizado = Table.AddColumn(
+        TipadoNum, "Contabilizado",
+        each
+            let t = Text.Trim(Text.From([#"Num. transação"] ?? ""))
+            in if t = "" or t = "000000" or t = "0" then "Não" else "Sim",
+        type text
+    ),
+
+    // Pago: Saldo ML zerado
+    ComPago = Table.AddColumn(
+        ComContabilizado, "Pago",
+        each
+            if [Saldo ML] = null then "Indefinido"
+            else if [Saldo ML] = 0 then "Sim"
+            else "Não",
+        type text
+    ),
+
+    // ── Chave composta CNPJ + Número da nota ─────────────────────
+    // Chave SISAP: CNPJ (14) + Número da prova + Data de emissão (YYYY-MM-DD)
+    // Espelha exatamente a chave criada na consulta NFS-e
+    ComChave = Table.AddColumn(
+        ComPago, "Chave_SISAP",
+        each
+            let
+                cnpj = Text.PadStart(
+                           Text.Select(Text.From([#"Registro Tributário"] ?? ""), {"0".."9"}),
+                           14, "0"),
+                num  = Text.Trim(Text.From([#"Número da prova"] ?? "")),
+                dt   = if [Data de emissão da prova] = null then ""
+                       else Date.ToText([Data de emissão da prova], "yyyy-MM-dd")
+            in cnpj & "|" & num & "|" & dt,
+        type text
+    ),
+
+    // ── Remove duplicados — mantém maior valor por chave ──────────
+    Ordenado      = Table.Sort(ComChave, {{"Prova Total ML", Order.Descending}}),
+    SemDuplicados = Table.Distinct(Ordenado, {"Chave_SISAP"})
+
+in
+    SemDuplicados

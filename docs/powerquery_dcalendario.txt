@@ -1,0 +1,78 @@
+let
+    // ── Intervalo dinâmico ─────────────────────────────────────────
+    // Início fixo em 2022; fim = hoje. Ajuste DataInicio se necessário.
+    DataInicio = #date(2022, 1, 1),
+    DataFim    = Date.From(DateTime.LocalNow()),
+
+    // ── Geração da lista de datas ──────────────────────────────────
+    // List.Dates é mais eficiente que Table.FromList + Duration.Days
+    Tabela = Table.FromColumns(
+        {List.Dates(DataInicio, Duration.Days(DataFim - DataInicio) + 1, #duration(1,0,0,0))},
+        type table [Data = date]
+    ),
+
+    // ── Colunas calculadas ─────────────────────────────────────────
+    // Todas em um único Table.AddColumn encadeado via List.Accumulate
+    // para minimizar passagens sobre a tabela.
+    // Opção mais legível: encadeamento direto com nomes claros.
+
+    ComAno = Table.AddColumn(Tabela, "Ano",
+        each Date.Year([Data]), Int64.Type),
+
+    ComMesNum = Table.AddColumn(ComAno, "Mês Número",
+        each Date.Month([Data]), Int64.Type),
+
+    ComMes = Table.AddColumn(ComMesNum, "Mês",
+        each {"Janeiro","Fevereiro","Março","Abril","Maio","Junho",
+              "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"}
+             {[#"Mês Número"] - 1},
+        type text),
+
+    // Ano-Mês: formato YYYY-MM — chave de relacionamento com NFS-e e SISAP
+    ComAnoMes = Table.AddColumn(ComMes, "Ano-Mês",
+        each Text.From([Ano]) & "-" &
+             Text.PadStart(Text.From([#"Mês Número"]), 2, "0"),
+        type text),
+
+    // Competência: formato MM/AAAA — exibição nos visuais do Power BI
+    // Exemplo: 01/2026, 12/2025
+    ComCompetencia = Table.AddColumn(ComAnoMes, "Competência",
+        each Text.PadStart(Text.From([#"Mês Número"]), 2, "0") & "/" &
+             Text.From([Ano]),
+        type text),
+
+    // Mês-Ano abreviado: jan/2026 — legenda em gráficos
+    ComMesAno = Table.AddColumn(ComCompetencia, "Mês-Ano",
+        each Text.Lower(Text.Start([Mês], 3)) & "/" & Text.From([Ano]),
+        type text),
+
+    ComTrimestre = Table.AddColumn(ComMesAno, "Trimestre",
+        each "T" & Text.From(Date.QuarterOfYear([Data])),
+        type text),
+
+    // Ano-Trimestre: útil para segmentadores e agrupamentos
+    ComAnoTrim = Table.AddColumn(ComTrimestre, "Ano-Trimestre",
+        each Text.From([Ano]) & "-T" & Text.From(Date.QuarterOfYear([Data])),
+        type text),
+
+    ComSemana = Table.AddColumn(ComAnoTrim, "Semana do Ano",
+        each Date.WeekOfYear([Data]), Int64.Type),
+
+    ComDiaSem = Table.AddColumn(ComSemana, "Dia da Semana",
+        each Date.DayOfWeekName([Data], "pt-BR"), type text),
+
+    // Dia útil: exclui sábado (6) e domingo (0)
+    // Não considera feriados — ajuste conforme necessidade
+    ComDiaUtil = Table.AddColumn(ComDiaSem, "Dia Útil",
+        each if Date.DayOfWeek([Data], Day.Monday) >= 5 then "Não" else "Sim",
+        type text),
+
+    // Flag do mês atual — útil para filtros padrão em relatórios
+    MesAtual = Date.Month(DateTime.LocalNow()),
+    AnoAtual = Date.Year(DateTime.LocalNow()),
+    ComMesAtual = Table.AddColumn(ComDiaUtil, "Mês Atual",
+        each if [Ano] = AnoAtual and [#"Mês Número"] = MesAtual then "Sim" else "Não",
+        type text)
+
+in
+    ComMesAtual

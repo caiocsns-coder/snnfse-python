@@ -1,0 +1,92 @@
+let
+    // ══════════════════════════════════════════════════════════════
+    // Eventos NFS-e — Power Query M
+    // Fonte: eventos_consolidado.csv (EDB) ou eventos_consolidado_azulao.csv (Azulão)
+    // Relacionamento: Eventos[Chave NFS-e] → NFS-e[Chave NFS-e] (Muitos→Um)
+    // ══════════════════════════════════════════════════════════════
+
+    // ── 1. CONFIGURAÇÃO ───────────────────────────────────────────
+    // EDB    → "C:\...\nfse_edb\dados\eventos_consolidado.csv"
+    // Azulão → "C:\...\nfse_azulao\dados\eventos_consolidado_azulao.csv"
+    CaminhoEventos = "C:\caminho\para\dados\eventos_consolidado.csv",
+
+    // ── 2. LEITURA DO CSV ─────────────────────────────────────────
+    Fonte      = Csv.Document(File.Contents(CaminhoEventos),
+                     [Delimiter = ",", Encoding = 65001, QuoteStyle = QuoteStyle.Csv]),
+    Cabecalhos = Table.PromoteHeaders(Fonte, [PromoteAllScalars = true]),
+
+    // ── 3. TIPAGEM COMPLETA (10 colunas) ─────────────────────────
+    Tipado = Table.TransformColumnTypes(Cabecalhos, {
+        {"Arquivo",             type text},
+        {"Chave NFS-e",         type text},
+        {"Tipo de Evento",      type text},
+        {"Data do Evento",      type date},
+        {"Data Processamento",  type date},
+        {"Nº Seq. Evento",      type text},
+        {"CNPJ Autor",          type text},
+        {"Unidade Elecnor",     type text},
+        {"Cód. Motivo",         type text},
+        {"Motivo",              type text}
+    }),
+
+    // ── 4. PERÍODO DO EVENTO ──────────────────────────────────────
+    ComAno = Table.AddColumn(
+        Tipado, "Ano Evento",
+        each if [Data do Evento] = null then null else Date.Year([Data do Evento]),
+        Int64.Type
+    ),
+    ComMesNum = Table.AddColumn(
+        ComAno, "Mês Número Evento",
+        each if [Data do Evento] = null then null else Date.Month([Data do Evento]),
+        Int64.Type
+    ),
+    ComAnoMes = Table.AddColumn(
+        ComMesNum, "Ano-Mês Evento",
+        each if [#"Ano Evento"] = null then null
+             else Text.From([#"Ano Evento"]) & "-" &
+                  Text.PadStart(Text.From([#"Mês Número Evento"]), 2, "0"),
+        type text
+    ),
+
+    // ── 5. CLASSIFICAÇÃO ─────────────────────────────────────────
+
+    // Flag de cancelamento — evita SEARCH nas medidas DAX
+    // Cobre: Cancelamento de NFS-e / por Substituição / por Ofício /
+    //        Deferido por Análise Fiscal / Solicitação de Análise Fiscal
+    ComCancelamento = Table.AddColumn(
+        ComAnoMes, "É Cancelamento",
+        each if Text.Contains([Tipo de Evento] ?? "", "Cancelamento") then "Sim" else "Não",
+        type text
+    ),
+
+    // Flag de rejeição (tomador/prestador/intermediário não reconhece a nota)
+    ComRejeicao = Table.AddColumn(
+        ComCancelamento, "É Rejeição",
+        each if Text.Contains([Tipo de Evento] ?? "", "Rejeição") then "Sim" else "Não",
+        type text
+    ),
+
+    // Flag de confirmação
+    ComConfirmacao = Table.AddColumn(
+        ComRejeicao, "É Confirmação",
+        each if Text.Contains([Tipo de Evento] ?? "", "Confirmação") then "Sim" else "Não",
+        type text
+    ),
+
+    // Empresa — derivada da unidade
+    ComEmpresa = Table.AddColumn(
+        ComConfirmacao, "Empresa",
+        each if   Text.Contains([Unidade Elecnor] ?? "", "Azulão") then "Elecnor Azulão"
+             else if Text.Contains([Unidade Elecnor] ?? "", "Elecnor") then "EDB"
+             else "Não Identificada",
+        type text
+    ),
+
+    // ── 6. LIMPEZA FINAL ──────────────────────────────────────────
+    Limpo    = Table.SelectRows(
+                   ComEmpresa,
+                   each [#"Chave NFS-e"] <> null and [#"Chave NFS-e"] <> ""),
+    Ordenado = Table.Sort(Limpo, {{"Data do Evento", Order.Descending}})
+
+in
+    Ordenado

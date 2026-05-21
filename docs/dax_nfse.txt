@@ -1,0 +1,199 @@
+// ══════════════════════════════════════════════════════════════════
+// Medidas DAX — NFS-e Análise Fiscal
+// Tabela principal : 'NFS-e' (consulta Power Query)
+// Tabela auxiliar  : 'alertas' (alertas_retroativos.csv)
+//
+// Medidas com sufixo Card → usar SOMENTE no visual Cartão Novo
+// Medidas numéricas       → usar em cálculos, tabelas e outros visuais
+// ══════════════════════════════════════════════════════════════════
+
+
+// ── CONTAGEM GERAL ────────────────────────────────────────────────
+
+Total Notas =
+    DISTINCTCOUNT('NFS-e'[Chave NFS-e])
+
+Total Notas Card =
+    VAR n = [Total Notas]
+    RETURN FORMAT(n, "########0")
+
+Notas Canceladas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Cancelada] = "Sim"
+    )
+
+Notas Canceladas Card =
+    VAR n = [Notas Canceladas]
+    RETURN FORMAT(n, "########0")
+
+Notas Geradas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Situação] = "Gerada"
+    )
+
+Notas Geradas Card =
+    VAR n = [Notas Geradas]
+    RETURN FORMAT(n, "########0")
+
+Notas Substitutas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Situação] = "Gerada em Substituição"
+    )
+
+Notas Substitutas Card =
+    VAR n = [Notas Substitutas]
+    RETURN FORMAT(n, "########0")
+
+
+// ── SITUAÇÃO × ERP ────────────────────────────────────────────────
+// As medidas abaixo pressupõem que o merge com o ERP foi realizado
+// e que as colunas "Existe no ERP", "Contabilizado" e "Pago" estão
+// disponíveis na tabela NFS-e após o join.
+
+// Notas no ERP
+Notas no ERP =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Existe no ERP] = "Sim"
+    )
+
+Notas no ERP Card =
+    VAR n = [Notas no ERP]
+    RETURN FORMAT(n, "########0")
+
+// Notas fora do ERP
+Notas Fora do ERP =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Existe no ERP] = "Não"
+    )
+
+Notas Fora do ERP Card =
+    VAR n = [Notas Fora do ERP]
+    RETURN FORMAT(n, "########0")
+
+% No ERP =
+    DIVIDE([Notas no ERP], [Total Notas], 0)
+
+% No ERP Card =
+    VAR n = [% No ERP]
+    RETURN FORMAT(n, "0,00%")
+
+% Fora do ERP =
+    DIVIDE([Notas Fora do ERP], [Total Notas], 0)
+
+% Fora do ERP Card =
+    VAR n = [% Fora do ERP]
+    RETURN FORMAT(n, "0,00%")
+
+
+// ── ALERTAS ───────────────────────────────────────────────────────
+// Baseados na coluna Alerta gerada no Power Query
+
+Canceladas e Pagas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Alerta] = "Cancelada e paga — verificar"
+    )
+
+Canceladas e Pagas Card =
+    VAR n = [Canceladas e Pagas]
+    RETURN FORMAT(n, "########0")
+
+Canceladas Contabilizadas =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Alerta] = "Cancelada e contabilizada — estornar"
+    )
+
+Canceladas Contabilizadas Card =
+    VAR n = [Canceladas Contabilizadas]
+    RETURN FORMAT(n, "########0")
+
+Canceladas no ERP sem Baixa =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Alerta] = "Cancelada no ERP — baixar"
+    )
+
+Canceladas no ERP sem Baixa Card =
+    VAR n = [Canceladas no ERP sem Baixa]
+    RETURN FORMAT(n, "########0")
+
+Geradas sem Lançamento =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Alerta] = "Gerada — lançar no ERP"
+    )
+
+Geradas sem Lançamento Card =
+    VAR n = [Geradas sem Lançamento]
+    RETURN FORMAT(n, "########0")
+
+Valor Geradas sem Lançamento =
+    CALCULATE(
+        SUM('NFS-e'[Valor Serviço]),
+        'NFS-e'[Alerta] = "Gerada — lançar no ERP"
+    )
+
+Valor Geradas sem Lançamento Card =
+    VAR n = [Valor Geradas sem Lançamento]
+    RETURN FORMAT(n, "R$ #.##0,00")
+
+Canceladas OK =
+    CALCULATE(
+        DISTINCTCOUNT('NFS-e'[Chave NFS-e]),
+        'NFS-e'[Cancelada] = "Sim",
+        'NFS-e'[Alerta] = "OK"
+    )
+
+Canceladas OK Card =
+    VAR n = [Canceladas OK]
+    RETURN FORMAT(n, "########0")
+
+// Score de risco por filial — ranqueia onde agir primeiro
+// Pesos: paga indevidamente (4) > contabilizada sem estorno (3)
+//       > no ERP sem baixa (2) > gerada sem lançamento (1)
+Score de Risco =
+    [Canceladas e Pagas] * 4
+    + [Canceladas Contabilizadas] * 3
+    + [Canceladas no ERP sem Baixa] * 2
+    + [Geradas sem Lançamento] * 1
+
+Score de Risco Card =
+    VAR n = [Score de Risco]
+    RETURN FORMAT(n, "########0")
+
+
+// ── RETROATIVOS ───────────────────────────────────────────────────
+// Requer tabela 'alertas' carregada do alertas_retroativos.csv
+
+Total Retroativos =
+    COUNTROWS('alertas')
+
+Total Retroativos Card =
+    VAR n = [Total Retroativos]
+    RETURN FORMAT(n, "########0")
+
+Retroativos Críticos =
+    CALCULATE(
+        COUNTROWS('alertas'),
+        'alertas'[Urgência] = "Crítica"
+    )
+
+Retroativos Críticos Card =
+    VAR n = [Retroativos Críticos]
+    RETURN FORMAT(n, "########0")
+
+Retroativos Alta Prioridade =
+    CALCULATE(
+        COUNTROWS('alertas'),
+        'alertas'[Urgência] = "Alta"
+    )
+
+Retroativos Alta Prioridade Card =
+    VAR n = [Retroativos Alta Prioridade]
+    RETURN FORMAT(n, "########0")
